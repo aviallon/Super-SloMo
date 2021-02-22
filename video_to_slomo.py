@@ -72,7 +72,7 @@ def extract_frames(ffmpeg_path, video, outDir):
     """
     error = ""
 
-    ffmpeg_command = '{} -hide_banner -i {} -vsync 0 {}/%06d.png'.format(ffmpeg_path, video, outDir)
+    ffmpeg_command = '{} -hide_banner -i "{}" -vsync 0 "{}/%06d.png"'.format(ffmpeg_path, video, outDir)
 
     print(ffmpeg_command)
     retn = os.system(ffmpeg_command)
@@ -80,7 +80,7 @@ def extract_frames(ffmpeg_path, video, outDir):
         error = "Error converting file:{}. Exiting.".format(video)
         return error
 
-    ffmpeg_command = '{} -hide_banner -i {} -c:a copy -map 0:a? {}/../audio.mkv'.format(ffmpeg_path, video, outDir)
+    ffmpeg_command = '{} -hide_banner -i "{}" -c:a copy -map 0:a? "{}/../audio.mkv"'.format(ffmpeg_path, video, outDir)
     print("Extracting audio:\n", ffmpeg_command)
     retn = os.system(ffmpeg_command)
     if retn:
@@ -121,7 +121,7 @@ def create_video(ffmpeg_path, dir, speed_factor):
                     
         acodec_args += ",".join(acodec_filters)
     
-    ffmpeg_command = f'{ffmpeg_path} -hide_banner -r {args.fps} -i {dir}/%d.png -i {dir}/../audio.mkv -acodec {acodec} {acodec_args} -vcodec {args.vcodec} {codec_args} -map 0:v:0 -map 1:a:0? {Path(args.output).resolve()}'
+    ffmpeg_command = f'{ffmpeg_path} -hide_banner -r {args.fps} -i "{dir}/%d.png" -i "{dir}/../audio.mkv" -acodec {acodec} {acodec_args} -vcodec {args.vcodec} {codec_args} -map 0:v:0 -map 1:a:0? "{Path(args.output).resolve()}"'
     
     print(ffmpeg_command)
     retn = os.system(ffmpeg_command)
