@@ -11,6 +11,7 @@ import model
 import dataloader
 import platform
 from tqdm import tqdm
+from pathlib import Path
 
 # For parsing commandline arguments
 parser = argparse.ArgumentParser()
@@ -105,7 +106,7 @@ def create_video(dir):
     if args.vcodec == 'libx264':
         codec_args = "-preset:v veryfast -crf 18 -pix_fmt yuv420p -tune:v film -profile:v high"
     
-    ffmpeg_command = f'{ffmpeg_path} -r {args.fps} -i {dir}/%d.png -i {dir}/../audio.mkv -acodec copy -vcodec {args.vcodec} {codec_args} -map 0:v:0 -map 1:a:0? {args.output}'
+    ffmpeg_command = f'{ffmpeg_path} -r {args.fps} -i {dir}/%d.png -i {dir}/../audio.mkv -acodec copy -vcodec {args.vcodec} {codec_args} -map 0:v:0 -map 1:a:0? {Path(args.output).resolve()}'
     
     print(ffmpeg_command)
     retn = os.system(ffmpeg_command)
@@ -139,7 +140,7 @@ def main():
     outputPath     = os.path.join(extractionDir, "output")
     os.mkdir(extractionPath)
     os.mkdir(outputPath)
-    error = extract_frames(args.video, extractionPath)
+    error = extract_frames(Path(args.video).resolve(), extractionPath)
     if error:
         print(error)
         exit(1)
