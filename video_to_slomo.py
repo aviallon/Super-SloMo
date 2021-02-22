@@ -12,18 +12,21 @@ import dataloader
 import platform
 from tqdm import tqdm
 from pathlib import Path
+import subprocess
+import math
 
 # For parsing commandline arguments
 parser = argparse.ArgumentParser()
 parser.add_argument("--ffmpeg_dir", type=str, default="", help='path to ffmpeg.exe')
 parser.add_argument("--video", type=str, required=True, help='path of video to be converted')
 parser.add_argument("--checkpoint", type=str, required=True, help='path of checkpoint for pretrained model')
-parser.add_argument("--fps", type=float, default=30, help='specify fps of output video. Default: 30.')
+parser.add_argument("--fps", type=float, default=None, help='specify fps of output video. Default: 30.')
 parser.add_argument("--sf", type=int, required=True, help='specify the slomo factor N. This will increase the frames by Nx. Example sf=2 ==> 2x frames')
 parser.add_argument("--batch_size", type=int, default=1, help='Specify batch size for faster conversion. This will depend on your cpu/gpu memory. Default: 1')
-parser.add_argument("--vcodec", type=str, default="ffvhuff", help='Specify a codec different than default', choices=['ffvhuff', 'libx264'])
+parser.add_argument("--vcodec", type=str, default="libx264", help='Specify a codec different than default', choices=['ffvhuff', 'libx264'])
 parser.add_argument("--output", type=str, default="output.mkv", help='Specify output file name. Default: output.mp4')
 args = parser.parse_args()
+
 
 def check():
     """
@@ -45,13 +48,13 @@ def check():
         error = "Error: --sf/slomo factor has to be atleast 2"
     if (args.batch_size < 1):
         error = "Error: --batch_size has to be atleast 1"
-    if (args.fps < 1):
+    if args.fps is not None and (args.fps < 1):
         error = "Error: --fps has to be atleast 1"
     if ".mkv" not in args.output:
         error = "output needs to have mkv container"
     return error
 
-def extract_frames(video, outDir):
+def extract_frames(ffmpeg_path, video, outDir):
     """
     Converts the `video` to images.
 
@@ -67,17 +70,9 @@ def extract_frames(video, outDir):
         error : string
             Error message if error occurs otherwise blank string.
     """
-
-
     error = ""
-    IS_WINDOWS = 'Windows' == platform.system()
 
-    if IS_WINDOWS:
-        ffmpeg_path = os.path.join(args.ffmpeg_dir, "ffmpeg")
-    else:
-        ffmpeg_path = "ffmpeg"
-
-    ffmpeg_command = '{} -i {} -vsync 0 {}/%06d.png'.format(ffmpeg_path, video, outDir)
+    ffmpeg_command = '{} -hide_banner -i {} -vsync 0 {}/%06d.png'.format(ffmpeg_path, video, outDir)
 
     print(ffmpeg_command)
     retn = os.system(ffmpeg_command)
@@ -85,28 +80,48 @@ def extract_frames(video, outDir):
         error = "Error converting file:{}. Exiting.".format(video)
         return error
 
-    ffmpeg_command = '{} -i {} -c:a copy -map 0:a? {}/../audio.mkv'.format(ffmpeg_path, video, outDir)
+    ffmpeg_command = '{} -hide_banner -i {} -c:a copy -map 0:a? {}/../audio.mkv'.format(ffmpeg_path, video, outDir)
     print("Extracting audio:\n", ffmpeg_command)
     retn = os.system(ffmpeg_command)
     if retn:
         error = "Error extracting audio from file:{}. Exiting.".format(video)
     return error
 
-def create_video(dir):
-    IS_WINDOWS = 'Windows' == platform.system()
-
-    if IS_WINDOWS:
-        ffmpeg_path = os.path.join(args.ffmpeg_dir, "ffmpeg")
-    else:
-        ffmpeg_path = "ffmpeg"
+def create_video(ffmpeg_path, dir, speed_factor):
 
     error = ""
     
     codec_args = ""
     if args.vcodec == 'libx264':
         codec_args = "-preset:v veryfast -crf 18 -pix_fmt yuv420p -tune:v film -profile:v high"
+        
+    acodec = "copy"
+    acodec_args = ""
+    if speed_factor != 1:
+        acodec = "libopus"
+        acodec_args = f"-b:a 128k -frame_duration 120 -cutoff 20000 -filter:a "
+        acodec_filters = []
+        speed_nums = 1
+        remain = speed_factor
+        speed_quantum = 0.5
+        if speed_factor < 0.5:
+            speed_quantum = 0.5
+        elif speed_factor > 2:
+            speed_quantum = 2
+            
+            
+        if speed_nums != 1:
+            speed_nums = int(math.log(speed_factor, speed_quantum))
+            remain = speed_factor / speed_quantum**speed_nums
+            
+            acodec_filters += [f"atempo={speed_quantum}" for i in range(speed_nums)]
+            
+        if remain != 0:
+            acodec_filters += [f"atempo={remain}"]
+                    
+        acodec_args += ",".join(acodec_filters)
     
-    ffmpeg_command = f'{ffmpeg_path} -r {args.fps} -i {dir}/%d.png -i {dir}/../audio.mkv -acodec copy -vcodec {args.vcodec} {codec_args} -map 0:v:0 -map 1:a:0? {Path(args.output).resolve()}'
+    ffmpeg_command = f'{ffmpeg_path} -hide_banner -r {args.fps} -i {dir}/%d.png -i {dir}/../audio.mkv -acodec {acodec} {acodec_args} -vcodec {args.vcodec} {codec_args} -map 0:v:0 -map 1:a:0? {Path(args.output).resolve()}'
     
     print(ffmpeg_command)
     retn = os.system(ffmpeg_command)
@@ -123,24 +138,60 @@ def main():
         exit(1)
 
     # Create extraction folder and extract frames
+    
     IS_WINDOWS = 'Windows' == platform.system()
+
+
+    ffmpeg_path = "ffmpeg"
+    
     extractionDir = "tmpSuperSloMo"
     if not IS_WINDOWS:
-        # Assuming UNIX-like system where "." indicates hidden directories
         extractionDir = os.path.join("/var/tmp", extractionDir)
+        
     if os.path.isdir(extractionDir):
         rmtree(extractionDir)
+        
     os.mkdir(extractionDir)
     if IS_WINDOWS:
         FILE_ATTRIBUTE_HIDDEN = 0x02
         # ctypes.windll only exists on Windows
         ctypes.windll.kernel32.SetFileAttributesW(extractionDir, FILE_ATTRIBUTE_HIDDEN)
+        
+        ffmpeg_path = os.path.join(args.ffmpeg_dir, "ffmpeg")
 
     extractionPath = os.path.join(extractionDir, "input")
     outputPath     = os.path.join(extractionDir, "output")
     os.mkdir(extractionPath)
     os.mkdir(outputPath)
-    error = extract_frames(Path(args.video).resolve(), extractionPath)
+    
+    
+    
+    # Get input video fps
+    ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
+    
+    ffprobe_command = [ffprobe_path, "-v", "error", "-select_streams", "v", "-of", "default=noprint_wrappers=1:nokey=1", "-show_entries", "stream=r_frame_rate", str(Path(args.video).resolve())]
+    print(" ".join(ffprobe_command), flush=True)
+    res = subprocess.run(ffprobe_command, stdout=subprocess.PIPE)
+    
+    #print("OUTPUT:", res.stdout)
+    
+    ffprobe_output = res.stdout.decode().strip().split("/")
+    input_fps = float(ffprobe_output[0]) / float(ffprobe_output[1])
+    
+    if args.fps is None:
+        args.fps = input_fps * args.sf
+        print(f"No fps specified, default to {args.fps}")
+
+    
+    speed_factor = args.fps / (input_fps * args.sf)
+    
+    if abs(1 - speed_factor) < 1e-8:
+        speed_factor = 1
+        
+    print(f"Speed factor: {speed_factor} (input video FPS: {input_fps})")
+    
+    
+    error = extract_frames(ffmpeg_path, Path(args.video).resolve(), extractionPath)
     if error:
         print(error)
         exit(1)
@@ -238,8 +289,9 @@ def main():
             # Set counter accounting for batching of frames
             frameCounter += args.sf * (args.batch_size - 1)
 
+
     # Generate video from interpolated frames
-    create_video(outputPath)
+    create_video(ffmpeg_path, outputPath, speed_factor)
 
     # Remove temporary files
     rmtree(extractionDir)
